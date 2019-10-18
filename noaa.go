@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Constant values for the weather.gov REST API
@@ -27,6 +30,7 @@ type PointsResponse struct {
 	GridY                       int64  `json:"gridY"`
 	EndpointForecast            string `json:"forecast"`
 	EndpointForecastHourly      string `json:"forecastHourly"`
+	EndpointForecasGrid         string `json:"forecastGridData"`
 	EndpointObservationStations string `json:"observationStations"`
 	Timezone                    string `json:"timeZone"`
 	RadarStation                string `json:"radarStation"`
@@ -60,6 +64,32 @@ type ForecastResponse struct {
 		Details         string  `json:"detailedForecast"`
 	} `json:"periods"`
 	Point *PointsResponse
+}
+
+// ForecastTimeseries holds the hourly forecasts values from within ForecastGridResponse
+type ForecastTimeseries struct {
+	Units  string `json:"uom"`
+	Values []struct {
+		Time  ForecastTime `json:"validTime,string"`
+		Value float64      `json:"value"`
+	} `json:"values"`
+}
+
+// ForecastGridResponse holds the JSON values from /gridpoints/<cwa>/<x,y>
+type ForecastGridResponse struct {
+	Updated   string `json:"updateTime"`
+	Elevation struct {
+		Value float64 `json:"value"`
+		Units string  `json:"unitCode"`
+	} `json:"elevation"`
+	Temperature              ForecastTimeseries `json:"temperature"`
+	SkyCover                 ForecastTimeseries `json:"skyCover"`
+	WindSpeed                ForecastTimeseries `json:"windSpeed"`
+	PrecipitationProbability ForecastTimeseries `json:"probabilityOfPrecipitation"`
+	PrecipitationQuantity    ForecastTimeseries `json:"quantitativePrecipitation"`
+	SnowFallAmount           ForecastTimeseries `json:"snowfallAmount"`
+	SnowLevel                ForecastTimeseries `json:"snowLevel"`
+	Point                    *PointsResponse
 }
 
 // Cache used for point lookup to save some HTTP round trips
@@ -143,6 +173,67 @@ func Forecast(lat string, lon string) (forecast *ForecastResponse, err error) {
 
 	decoder := json.NewDecoder(res.Body)
 	if err = decoder.Decode(&forecast); err != nil {
+		return nil, err
+	}
+	forecast.Point = point
+	return forecast, nil
+}
+
+// ForecastTime parses the NWS time format
+type ForecastTime struct {
+	Time     time.Time
+	Duration time.Duration
+}
+
+// UnmarshalJSON parses the NWS time format
+func (t *ForecastTime) UnmarshalJSON(buf []byte) error {
+	ttStr := strings.ReplaceAll(string(buf), `"`, "")
+	tBase := strings.Split(ttStr, "+")[0]
+	tt, err := time.Parse(time.RFC3339, fmt.Sprintf("%sZ", tBase))
+	var dur time.Duration
+	if err != nil {
+		return err
+	}
+	ok := strings.Contains(ttStr, "PT")
+	if ok {
+		dur, err = time.ParseDuration(strings.ToLower(strings.Split(ttStr, "PT")[1]))
+	} else {
+		// sometimes times are in days
+		durStr := strings.Split(ttStr, "P")[1]
+		if strings.HasSuffix(durStr, "D") {
+			durDays, err := strconv.Atoi(strings.ReplaceAll(durStr, "D", ""))
+			if err != nil {
+				return err
+			}
+			dur, err = time.ParseDuration(fmt.Sprintf("%dh", durDays*24))
+		} else {
+			err = fmt.Errorf("duration not recognized: %s", ttStr)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	t.Time = tt
+	t.Duration = dur
+	return nil
+}
+
+// ForecastDetailed returns a set of timeseries in ForecastGridResponse
+func ForecastDetailed(lat string, lon string) (forecast *ForecastGridResponse, err error) {
+	point, err := Points(lat, lon)
+	if err != nil {
+		return nil, err
+	}
+	res, err := apiCall(point.EndpointForecasGrid)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	if err = json.Unmarshal(body, &forecast); err != nil {
 		return nil, err
 	}
 	forecast.Point = point
