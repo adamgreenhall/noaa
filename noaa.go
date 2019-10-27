@@ -102,6 +102,7 @@ type ForecastGridResponse struct {
 	Point      *PointsResponse
 	Elevation  forecastElevation              `json:"elevation"`
 	Timeseries map[string]*ForecastTimeseries `json:"timeseries"`
+	endpoint   string
 }
 
 // AverageForecast takes the mean between many ForecastGridResponse
@@ -124,7 +125,7 @@ func AverageForecast(forecasts []*ForecastGridResponse) (*ForecastGridResponse, 
 		}
 	}
 	for k, ts := range timeseriesArrays {
-		tsMean, err := averageForecastTimeseries(ts)
+		tsMean, err := averageForecastTimeseries(k, ts, forecasts)
 		if err != nil {
 			return nil, err
 		}
@@ -140,11 +141,12 @@ func AverageForecast(forecasts []*ForecastGridResponse) (*ForecastGridResponse, 
 	}, nil
 }
 
-func averageForecastTimeseries(forecasts []*ForecastTimeseries) (*ForecastTimeseries, error) {
+func averageForecastTimeseries(key string, forecasts []*ForecastTimeseries, rootForecasts []*ForecastGridResponse) (*ForecastTimeseries, error) {
 	N := float64(len(forecasts))
-	baseUnits := forecasts[0].Units
+	fcstBase := forecasts[0]
+	baseUnits := fcstBase.Units
 	avgValues := make([]*ForecastTimeseriesValue, 0)
-	for _, elem := range forecasts[0].Values {
+	for _, elem := range fcstBase.Values {
 		avgValues = append(avgValues, &ForecastTimeseriesValue{Time: elem.Time, Value: 0.0})
 	}
 	for i, fcst := range forecasts {
@@ -152,7 +154,14 @@ func averageForecastTimeseries(forecasts []*ForecastTimeseries) (*ForecastTimese
 			return nil, fmt.Errorf("units must match units[i=%d] %s != %s", i, fcst.Units, baseUnits)
 		}
 		if len(fcst.Values) != len(avgValues) {
-			return nil, fmt.Errorf("timeseries length must match. lenght[i=%d] of %d != %d", i, len(fcst.Values), len(avgValues))
+			return nil, fmt.Errorf(
+				"timeseries length must match for %s. lenght[i=%d] of %d != %d. compared forecasts for:\n%v\n%v",
+				key,
+				i,
+				len(fcst.Values), len(avgValues),
+				rootForecasts[0].endpoint,
+				rootForecasts[i].endpoint,
+			)
 		}
 		for e, elem := range fcst.Values {
 			if elem.Time != avgValues[e].Time {
@@ -339,5 +348,6 @@ func ForecastDetailed(lat string, lon string) (*ForecastGridResponse, error) {
 		Point:      point,
 		Elevation:  forecastRaw.Elevation,
 		Timeseries: timeseries,
+		endpoint:   point.EndpointForecasGrid,
 	}, nil
 }
