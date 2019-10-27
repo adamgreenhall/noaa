@@ -67,30 +67,101 @@ type ForecastResponse struct {
 	Point *PointsResponse
 }
 
+// ForecastTimeseriesValue is one timepoint of a forecast timeseries
+type ForecastTimeseriesValue struct {
+	Time  ForecastTime `json:"validTime,string"`
+	Value float64      `json:"value"`
+}
+
 // ForecastTimeseries holds the hourly forecasts values from within ForecastGridResponse
 type ForecastTimeseries struct {
-	Units  string `json:"uom"`
-	Values []struct {
-		Time  ForecastTime `json:"validTime,string"`
-		Value float64      `json:"value"`
-	} `json:"values"`
+	Units  string                     `json:"uom"`
+	Values []*ForecastTimeseriesValue `json:"values"`
+}
+
+type forecastElevation struct {
+	Value float64 `json:"value"`
+	Units string  `json:"unitCode"`
+}
+
+type forecastGridResponseRaw struct {
+	Updated                  string              `json:"updateTime"`
+	Elevation                forecastElevation   `json:"elevation"`
+	Temperature              *ForecastTimeseries `json:"temperature"`
+	SkyCover                 *ForecastTimeseries `json:"skyCover"`
+	WindSpeed                *ForecastTimeseries `json:"windSpeed"`
+	PrecipitationProbability *ForecastTimeseries `json:"probabilityOfPrecipitation"`
+	PrecipitationQuantity    *ForecastTimeseries `json:"quantitativePrecipitation"`
+	SnowFallAmount           *ForecastTimeseries `json:"snowfallAmount"`
+	SnowLevel                *ForecastTimeseries `json:"snowLevel"`
 }
 
 // ForecastGridResponse holds the JSON values from /gridpoints/<cwa>/<x,y>
 type ForecastGridResponse struct {
-	Updated   string `json:"updateTime"`
-	Elevation struct {
-		Value float64 `json:"value"`
-		Units string  `json:"unitCode"`
-	} `json:"elevation"`
-	Temperature              ForecastTimeseries `json:"temperature"`
-	SkyCover                 ForecastTimeseries `json:"skyCover"`
-	WindSpeed                ForecastTimeseries `json:"windSpeed"`
-	PrecipitationProbability ForecastTimeseries `json:"probabilityOfPrecipitation"`
-	PrecipitationQuantity    ForecastTimeseries `json:"quantitativePrecipitation"`
-	SnowFallAmount           ForecastTimeseries `json:"snowfallAmount"`
-	SnowLevel                ForecastTimeseries `json:"snowLevel"`
-	Point                    *PointsResponse
+	Updated    string `json:"updateTime"`
+	Point      *PointsResponse
+	Elevation  forecastElevation              `json:"elevation"`
+	Timeseries map[string]*ForecastTimeseries `json:"timeseries"`
+}
+
+// AverageForecast takes the mean between many ForecastGridResponse
+func AverageForecast(forecasts []*ForecastGridResponse) (*ForecastGridResponse, error) {
+	if len(forecasts) == 0 {
+		return nil, fmt.Errorf("no forecasts to average")
+	}
+	N := float64(len(forecasts))
+	baseElevationUnits := forecasts[0].Elevation.Units
+	meanElevation := 0.0
+	timeseriesArrays := make(map[string][]*ForecastTimeseries, 0)
+	meanTimeseries := make(map[string]*ForecastTimeseries, 0)
+	for i, fcst := range forecasts {
+		if fcst.Elevation.Units != baseElevationUnits {
+			return nil, fmt.Errorf("elevation units must match. units[i=%d] %s != %s", i, fcst.Elevation.Units, baseElevationUnits)
+		}
+		meanElevation += fcst.Elevation.Value / N
+		for k, ts := range fcst.Timeseries {
+			timeseriesArrays[k] = append(timeseriesArrays[k], ts)
+		}
+	}
+	for k, ts := range timeseriesArrays {
+		tsMean, err := averageForecastTimeseries(ts)
+		if err != nil {
+			return nil, err
+		}
+		meanTimeseries[k] = tsMean
+	}
+	return &ForecastGridResponse{
+		Updated: forecasts[0].Updated,
+		Elevation: forecastElevation{
+			Value: meanElevation,
+			Units: forecasts[0].Elevation.Units,
+		},
+		Timeseries: meanTimeseries,
+	}, nil
+}
+
+func averageForecastTimeseries(forecasts []*ForecastTimeseries) (*ForecastTimeseries, error) {
+	N := float64(len(forecasts))
+	baseUnits := forecasts[0].Units
+	avgValues := make([]*ForecastTimeseriesValue, 0)
+	for _, elem := range forecasts[0].Values {
+		avgValues = append(avgValues, &ForecastTimeseriesValue{Time: elem.Time, Value: 0.0})
+	}
+	for i, fcst := range forecasts {
+		if fcst.Units != baseUnits {
+			return nil, fmt.Errorf("units must match units[i=%d] %s != %s", i, fcst.Units, baseUnits)
+		}
+		if len(fcst.Values) != len(avgValues) {
+			return nil, fmt.Errorf("timeseries length must match. lenght[i=%d] of %d != %d", i, len(fcst.Values), len(avgValues))
+		}
+		for e, elem := range fcst.Values {
+			if elem.Time != avgValues[e].Time {
+				return nil, fmt.Errorf("times must match. time[i%d] of %s != %s", e, elem.Time, avgValues[e].Time)
+			}
+			avgValues[e].Value += elem.Value / N
+		}
+	}
+	return &ForecastTimeseries{Units: baseUnits, Values: avgValues}, nil
 }
 
 // Cache used for point lookup to save some HTTP round trips
@@ -116,6 +187,10 @@ func apiCall(endpoint string) (res *http.Response, err error) {
 	if res.StatusCode == 404 {
 		defer res.Body.Close()
 		return nil, errors.New("404: data not found for -> " + endpoint)
+	}
+	if res.StatusCode != 200 {
+		defer res.Body.Close()
+		return nil, fmt.Errorf("%d: data not found for -> %s", res.StatusCode, endpoint)
 	}
 	return res, nil
 }
@@ -233,7 +308,7 @@ func (t *ForecastTime) UnmarshalJSON(buf []byte) error {
 }
 
 // ForecastDetailed returns a set of timeseries in ForecastGridResponse
-func ForecastDetailed(lat string, lon string) (forecast *ForecastGridResponse, err error) {
+func ForecastDetailed(lat string, lon string) (*ForecastGridResponse, error) {
 	point, err := Points(lat, lon)
 	if err != nil {
 		return nil, err
@@ -247,9 +322,22 @@ func ForecastDetailed(lat string, lon string) (forecast *ForecastGridResponse, e
 	if err != nil {
 		return nil, err
 	}
-	if err = json.Unmarshal(body, &forecast); err != nil {
+	var forecastRaw forecastGridResponseRaw
+	if err = json.Unmarshal(body, &forecastRaw); err != nil {
 		return nil, err
 	}
-	forecast.Point = point
-	return forecast, nil
+	timeseries := make(map[string]*ForecastTimeseries, 0)
+	timeseries["Temperature"] = forecastRaw.Temperature
+	timeseries["SkyCover"] = forecastRaw.SkyCover
+	timeseries["WindSpeed"] = forecastRaw.WindSpeed
+	timeseries["PrecipitationProbability"] = forecastRaw.PrecipitationProbability
+	timeseries["PrecipitationQuantity"] = forecastRaw.PrecipitationQuantity
+	timeseries["SnowFallAmount"] = forecastRaw.SnowFallAmount
+	timeseries["SnowLevel"] = forecastRaw.SnowLevel
+	return &ForecastGridResponse{
+		Updated:    forecastRaw.Updated,
+		Point:      point,
+		Elevation:  forecastRaw.Elevation,
+		Timeseries: timeseries,
+	}, nil
 }
