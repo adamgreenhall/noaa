@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -185,36 +186,49 @@ type ForecastTime struct {
 	Duration time.Duration
 }
 
+func parseDuration(t string) (*time.Duration, error) {
+	durationRegex := regexp.MustCompile(`([0-9]d)?(t[0-9]+h)?`)
+	if !strings.Contains(t, "P") {
+		return nil, fmt.Errorf("no duration suffix found for time %s", t)
+	}
+	durStr := strings.ToLower(strings.Split(t, "P")[1])
+	matches := durationRegex.FindStringSubmatch(durStr)
+	dur := time.Duration(0)
+	if len(matches[1]) > 0 {
+		durIntDays, err := strconv.Atoi(strings.ReplaceAll(matches[1], "d", ""))
+		if err != nil {
+			return nil, err
+		}
+		durDays, err := time.ParseDuration(fmt.Sprintf("%dh", durIntDays*24))
+		if err != nil {
+			return nil, err
+		}
+		dur += durDays
+	}
+	if len(matches[2]) > 0 {
+		durHours, err := time.ParseDuration(strings.ReplaceAll(matches[2], "t", ""))
+		if err != nil {
+			return nil, err
+		}
+		dur += durHours
+	}
+	return &dur, nil
+}
+
 // UnmarshalJSON parses the NWS time format
 func (t *ForecastTime) UnmarshalJSON(buf []byte) error {
 	ttStr := strings.ReplaceAll(string(buf), `"`, "")
 	tBase := strings.Split(ttStr, "+")[0]
 	tt, err := time.Parse(time.RFC3339, fmt.Sprintf("%sZ", tBase))
-	var dur time.Duration
 	if err != nil {
 		return err
 	}
-	ok := strings.Contains(ttStr, "PT")
-	if ok {
-		dur, err = time.ParseDuration(strings.ToLower(strings.Split(ttStr, "PT")[1]))
-	} else {
-		// sometimes times are in days
-		durStr := strings.Split(ttStr, "P")[1]
-		if strings.HasSuffix(durStr, "D") {
-			durDays, err := strconv.Atoi(strings.ReplaceAll(durStr, "D", ""))
-			if err != nil {
-				return err
-			}
-			dur, err = time.ParseDuration(fmt.Sprintf("%dh", durDays*24))
-		} else {
-			err = fmt.Errorf("duration not recognized: %s", ttStr)
-		}
-	}
+	dur, err := parseDuration(ttStr)
 	if err != nil {
 		return err
 	}
 	t.Time = tt
-	t.Duration = dur
+	t.Duration = *dur
 	return nil
 }
 
