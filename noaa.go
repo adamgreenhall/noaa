@@ -84,7 +84,9 @@ type forecastElevation struct {
 	Units string  `json:"unitCode"`
 }
 
-type forecastGridResponseRaw struct {
+// ForecastGridResponse holds the JSON values from /gridpoints/<cwa>/<x,y>
+type ForecastGridResponse struct {
+	id                       string              `json:"@id"`
 	Updated                  string              `json:"updateTime"`
 	ValidTimes               *ForecastTime       `json:"validTimes"`
 	Elevation                forecastElevation   `json:"elevation"`
@@ -97,32 +99,29 @@ type forecastGridResponseRaw struct {
 	SnowLevel                *ForecastTimeseries `json:"snowLevel"`
 }
 
-// ForecastGridResponse holds the JSON values from /gridpoints/<cwa>/<x,y>
-type ForecastGridResponse struct {
-	Updated    string `json:"updateTime"`
-	Point      *PointsResponse
-	Elevation  forecastElevation              `json:"elevation"`
-	Timeseries map[string]*ForecastTimeseries `json:"timeseries"`
-	ValidTimes *ForecastTime
-	endpoint   string
+func (f *ForecastGridResponse) timeseriesMap() map[string]*ForecastTimeseries {
+	timeseries := make(map[string]*ForecastTimeseries, 0)
+	timeseries["Temperature"] = f.Temperature
+	timeseries["SkyCover"] = f.SkyCover
+	timeseries["WindSpeed"] = f.WindSpeed
+	timeseries["PrecipitationProbability"] = f.PrecipitationProbability
+	timeseries["PrecipitationQuantity"] = f.PrecipitationQuantity
+	timeseries["SnowFallAmount"] = f.SnowFallAmount
+	timeseries["SnowLevel"] = f.SnowLevel
+	return timeseries
 }
 
-func newForecastGridResponse(forecastRaw *forecastGridResponseRaw, point *PointsResponse) (*ForecastGridResponse, error) {
-	timeseries := make(map[string]*ForecastTimeseries, 0)
-	timeseries["Temperature"] = forecastRaw.Temperature
-	timeseries["SkyCover"] = forecastRaw.SkyCover
-	timeseries["WindSpeed"] = forecastRaw.WindSpeed
-	timeseries["PrecipitationProbability"] = forecastRaw.PrecipitationProbability
-	timeseries["PrecipitationQuantity"] = forecastRaw.PrecipitationQuantity
-	timeseries["SnowFallAmount"] = forecastRaw.SnowFallAmount
-	timeseries["SnowLevel"] = forecastRaw.SnowLevel
+func newForecastGridResponse(updated string, elevation forecastElevation, timeseriesMap map[string]*ForecastTimeseries) (*ForecastGridResponse, error) {
+	// TODO: check keys exist
 	return &ForecastGridResponse{
-		Updated:    forecastRaw.Updated,
-		Point:      point,
-		Elevation:  forecastRaw.Elevation,
-		Timeseries: timeseries,
-		ValidTimes: forecastRaw.ValidTimes,
-		endpoint:   point.EndpointForecasGrid,
+		Updated:                  updated,
+		Elevation:                elevation,
+		Temperature:              timeseriesMap["Temperature"],
+		SkyCover:                 timeseriesMap["SkyCover"],
+		PrecipitationProbability: timeseriesMap["PrecipitationProbability"],
+		PrecipitationQuantity:    timeseriesMap["PrecipitationQuantity"],
+		SnowFallAmount:           timeseriesMap["SnowFallAmount"],
+		SnowLevel:                timeseriesMap["SnowLevel"],
 	}, nil
 }
 
@@ -132,8 +131,8 @@ func AverageForecast(forecasts []*ForecastGridResponse) (*ForecastGridResponse, 
 		return nil, fmt.Errorf("no forecasts to average")
 	}
 	N := float64(len(forecasts))
-	tsMin := forecasts[0].Timeseries["Temperature"].Values[0].Time.Time
-	tsMax := forecasts[0].Timeseries["Temperature"].Values[0].Time.Time
+	tsMin := forecasts[0].Temperature.Values[0].Time.Time
+	tsMax := forecasts[0].Temperature.Values[0].Time.Time
 	baseElevationUnits := forecasts[0].Elevation.Units
 	meanElevation := 0.0
 	timeseriesArrays := make(map[string][]*ForecastTimeseries, 0)
@@ -143,7 +142,7 @@ func AverageForecast(forecasts []*ForecastGridResponse) (*ForecastGridResponse, 
 			return nil, fmt.Errorf("elevation units must match. units[i=%d] %s != %s", i, fcst.Elevation.Units, baseElevationUnits)
 		}
 		meanElevation += fcst.Elevation.Value / N
-		for k, ts := range fcst.Timeseries {
+		for k, ts := range fcst.timeseriesMap() {
 			timeseriesArrays[k] = append(timeseriesArrays[k], ts)
 			for _, elem := range ts.Values {
 				if elem.Time.Time.Before(tsMin) {
@@ -162,14 +161,14 @@ func AverageForecast(forecasts []*ForecastGridResponse) (*ForecastGridResponse, 
 		}
 		meanTimeseries[k] = tsMean
 	}
-	return &ForecastGridResponse{
-		Updated: forecasts[0].Updated,
-		Elevation: forecastElevation{
+	return newForecastGridResponse(
+		forecasts[0].Updated,
+		forecastElevation{
 			Value: meanElevation,
 			Units: forecasts[0].Elevation.Units,
 		},
-		Timeseries: meanTimeseries,
-	}, nil
+		meanTimeseries,
+	)
 }
 
 func (ts *ForecastTimeseries) hourly(tsMin time.Time, tsMax time.Time) (*ForecastTimeseries, error) {
@@ -233,12 +232,12 @@ func averageForecastTimeseries(key string, forecasts []*ForecastTimeseries, tsMi
 		}
 		if len(fcstHourly.Values) != len(avgValues) {
 			return nil, fmt.Errorf(
-				"timeseries length must match for %s. lenght[i=%d] of %d != %d. compared forecasts for:\n%v\n%v",
+				"timeseries length must match for %s. lenght[i=%d] of %d != %d. Forecast endpoints:\n%s\n%s",
 				key,
 				i,
 				len(fcstHourly.Values), len(avgValues),
-				rootForecasts[0].endpoint,
-				rootForecasts[i].endpoint,
+				rootForecasts[0].id,
+				rootForecasts[i].id,
 			)
 		}
 		for e, elem := range fcstHourly.Values {
@@ -413,9 +412,9 @@ func ForecastDetailed(lat string, lon string) (*ForecastGridResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	var forecastRaw *forecastGridResponseRaw
-	if err = json.Unmarshal(body, forecastRaw); err != nil {
+	var forecast *ForecastGridResponse
+	if err = json.Unmarshal(body, forecast); err != nil {
 		return nil, err
 	}
-	return newForecastGridResponse(forecastRaw, point)
+	return forecast, nil
 }

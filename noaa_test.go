@@ -77,58 +77,43 @@ type TestStruct struct {
 	Updated string `json:"updateTime"`
 }
 
-func pointResponseMock() *PointsResponse {
-	return &PointsResponse{
-		ID:                          "123",
-		CWA:                         "abc",
-		Office:                      "off",
-		GridX:                       128,
-		GridY:                       33,
-		EndpointForecast:            "http://endpoint",
-		EndpointForecastHourly:      "http://endpoint",
-		EndpointForecasGrid:         "http://endpoint",
-		EndpointObservationStations: "stations",
-		Timezone:                    "tz",
-		RadarStation:                "station",
+func readForecast(file string) (*ForecastGridResponse, error) {
+	var forecast ForecastGridResponse
+	buf, err := ioutil.ReadFile(file)
+	if err != nil {
+		return nil, err
 	}
+	if err = json.Unmarshal(buf, &forecast); err != nil {
+		return nil, err
+	}
+	return &forecast, nil
 }
 
 func TestHourly(t *testing.T) {
-	var forecastRaw forecastGridResponseRaw
-	point := pointResponseMock()
-	buf, err := ioutil.ReadFile("test_cases/gridForecast1.json")
+	fcst, err := readForecast("test_cases/gridForecast1.json")
 	assert.NoError(t, err)
-	err = json.Unmarshal(buf, &forecastRaw)
+	fcstHourly, err := fcst.Temperature.hourly(fcst.ValidTimes.Time, fcst.ValidTimes.endTime())
 	assert.NoError(t, err)
-
-	fcst, err := newForecastGridResponse(&forecastRaw, point)
-	assert.NoError(t, err)
-	fcstHourly, err := fcst.Timeseries["Temperature"].hourly(fcst.ValidTimes.Time, fcst.ValidTimes.endTime())
-	assert.NoError(t, err)
-	assert.Equal(t, int(fcst.ValidTimes.Duration.Hours()), len(fcstHourly.Values))
+	assert.Equal(t, int(fcst.ValidTimes.Duration.Hours())+1, len(fcstHourly.Values))
 	assert.NotNil(t, fcstHourly.Values[len(fcstHourly.Values)-1].Time)
 	assert.NotNil(t, fcstHourly.Values[len(fcstHourly.Values)-1].Value)
+	assert.Equal(t, fcst.Temperature.Values[0].Value, fcstHourly.Values[0].Value)
+	assert.Equal(t, fcst.Temperature.Values[0].Time.Time, fcstHourly.Values[0].Time.Time)
 }
 
 func TestAverage(t *testing.T) {
-	point := pointResponseMock()
 	var files = [...]string{
 		"test_cases/gridForecast1.json",
 		"test_cases/gridForecast2.json",
 	}
 	forecasts := make([]*ForecastGridResponse, len(files))
 	for i, file := range files {
-		var forecastRaw forecastGridResponseRaw
-		buf, err := ioutil.ReadFile(file)
-		assert.NoError(t, err)
-		err = json.Unmarshal(buf, &forecastRaw)
-		assert.NoError(t, err)
-		fcst, err := newForecastGridResponse(&forecastRaw, point)
+		fcst, err := readForecast(file)
 		assert.NoError(t, err)
 		forecasts[i] = fcst
 	}
 	fcstAvg, err := AverageForecast(forecasts)
 	assert.NoError(t, err)
 	assert.NotNil(t, fcstAvg)
-	assert.Equal(t, fcstAvg.Timeseries["Temperature"].Values[0].Value, (forecasts[0].Timeseries["Temperature"].Values[0].Value+forecasts[1].Timeseries["Temperature"].Values[0].Value)/2.0)
+	assert.Equal(t, fcstAvg.Temperature.Values[0].Value, (forecasts[0].Temperature.Values[0].Value+forecasts[1].Temperature.Values[0].Value)/2.0)
 }
