@@ -1,8 +1,12 @@
 package noaa
 
 import (
+	"encoding/json"
+	"io/ioutil"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestBlank(t *testing.T) {
@@ -67,4 +71,64 @@ func TestForecastDuration(t *testing.T) {
 			t.Errorf("computed duration %s doesn't match expected %s", durParsed, durExpected)
 		}
 	}
+}
+
+type TestStruct struct {
+	Updated string `json:"updateTime"`
+}
+
+func pointResponseMock() *PointsResponse {
+	return &PointsResponse{
+		ID:                          "123",
+		CWA:                         "abc",
+		Office:                      "off",
+		GridX:                       128,
+		GridY:                       33,
+		EndpointForecast:            "http://endpoint",
+		EndpointForecastHourly:      "http://endpoint",
+		EndpointForecasGrid:         "http://endpoint",
+		EndpointObservationStations: "stations",
+		Timezone:                    "tz",
+		RadarStation:                "station",
+	}
+}
+
+func TestHourly(t *testing.T) {
+	var forecastRaw forecastGridResponseRaw
+	point := pointResponseMock()
+	buf, err := ioutil.ReadFile("test_cases/gridForecast1.json")
+	assert.NoError(t, err)
+	err = json.Unmarshal(buf, &forecastRaw)
+	assert.NoError(t, err)
+
+	fcst, err := newForecastGridResponse(&forecastRaw, point)
+	assert.NoError(t, err)
+	fcstHourly, err := fcst.Timeseries["Temperature"].hourly(fcst.ValidTimes.Time, fcst.ValidTimes.endTime())
+	assert.NoError(t, err)
+	assert.Equal(t, int(fcst.ValidTimes.Duration.Hours()), len(fcstHourly.Values))
+	assert.NotNil(t, fcstHourly.Values[len(fcstHourly.Values)-1].Time)
+	assert.NotNil(t, fcstHourly.Values[len(fcstHourly.Values)-1].Value)
+}
+
+func TestAverage(t *testing.T) {
+	point := pointResponseMock()
+	var files = [...]string{
+		"test_cases/gridForecast1.json",
+		"test_cases/gridForecast2.json",
+	}
+	forecasts := make([]*ForecastGridResponse, len(files))
+	for i, file := range files {
+		var forecastRaw forecastGridResponseRaw
+		buf, err := ioutil.ReadFile(file)
+		assert.NoError(t, err)
+		err = json.Unmarshal(buf, &forecastRaw)
+		assert.NoError(t, err)
+		fcst, err := newForecastGridResponse(&forecastRaw, point)
+		assert.NoError(t, err)
+		forecasts[i] = fcst
+	}
+	fcstAvg, err := AverageForecast(forecasts)
+	assert.NoError(t, err)
+	assert.NotNil(t, fcstAvg)
+	assert.Equal(t, fcstAvg.Timeseries["Temperature"].Values[0].Value, (forecasts[0].Timeseries["Temperature"].Values[0].Value+forecasts[1].Timeseries["Temperature"].Values[0].Value)/2.0)
 }
