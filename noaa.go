@@ -75,8 +75,16 @@ type ForecastTimeseriesValue struct {
 
 // ForecastTimeseries holds the hourly forecasts values from within ForecastGridResponse
 type ForecastTimeseries struct {
+	Name   string
+	ID     string
 	Units  string                     `json:"uom"`
 	Values []*ForecastTimeseriesValue `json:"values"`
+}
+
+func (ts *ForecastTimeseries) fillInfo(name string, id string) *ForecastTimeseries {
+	ts.Name = name
+	ts.ID = id
+	return ts
 }
 
 type forecastElevation struct {
@@ -86,7 +94,7 @@ type forecastElevation struct {
 
 // ForecastGridResponse holds the JSON values from /gridpoints/<cwa>/<x,y>
 type ForecastGridResponse struct {
-	id                       string              `json:"@id"`
+	ID                       string              `json:"@id"`
 	Updated                  string              `json:"updateTime"`
 	ValidTimes               *ForecastTime       `json:"validTimes"`
 	Elevation                forecastElevation   `json:"elevation"`
@@ -101,13 +109,13 @@ type ForecastGridResponse struct {
 
 func (f *ForecastGridResponse) timeseriesMap() map[string]*ForecastTimeseries {
 	timeseries := make(map[string]*ForecastTimeseries, 0)
-	timeseries["Temperature"] = f.Temperature
-	timeseries["SkyCover"] = f.SkyCover
-	timeseries["WindSpeed"] = f.WindSpeed
-	timeseries["PrecipitationProbability"] = f.PrecipitationProbability
-	timeseries["PrecipitationQuantity"] = f.PrecipitationQuantity
-	timeseries["SnowFallAmount"] = f.SnowFallAmount
-	timeseries["SnowLevel"] = f.SnowLevel
+	timeseries["Temperature"] = f.Temperature.fillInfo("Temperature", f.ID)
+	timeseries["SkyCover"] = f.SkyCover.fillInfo("SkyCover", f.ID)
+	timeseries["WindSpeed"] = f.WindSpeed.fillInfo("WindSpeed", f.ID)
+	timeseries["PrecipitationProbability"] = f.PrecipitationProbability.fillInfo("PrecipitationProbability", f.ID)
+	timeseries["PrecipitationQuantity"] = f.PrecipitationQuantity.fillInfo("PrecipitationQuantity", f.ID)
+	timeseries["SnowFallAmount"] = f.SnowFallAmount.fillInfo("SnowFallAmount", f.ID)
+	timeseries["SnowLevel"] = f.SnowLevel.fillInfo("SnowLevel", f.ID)
 	return timeseries
 }
 
@@ -173,19 +181,31 @@ func AverageForecast(forecasts []*ForecastGridResponse) (*ForecastGridResponse, 
 
 func (ts *ForecastTimeseries) hourly(tsMin time.Time, tsMax time.Time) (*ForecastTimeseries, error) {
 	Nhours := int(tsMax.Sub(tsMin).Hours()) + 1
-	durationHour := time.Duration(int64(3600 * 1e9))
 	out := make([]*ForecastTimeseriesValue, Nhours)
 	hr := 0
+	firstValue := ts.Values[0]
+	padHoursStart := int(firstValue.Time.Time.Sub(tsMin).Hours())
+	for i := 0; i < padHoursStart; i++ {
+		tNew := tsMin.Add(time.Duration(i) * time.Hour)
+		out[hr] = &ForecastTimeseriesValue{
+			Time: ForecastTime{
+				Time:     tNew,
+				Duration: time.Hour,
+			},
+			Value: firstValue.Value,
+		}
+		hr++
+	}
 	for _, t := range ts.Values {
 		for i := 0; i < int(t.Time.Duration.Hours()); i++ {
-			tNew := t.Time.Time.Add(time.Duration(int64(i * 3600 * 1e9)))
+			tNew := t.Time.Time.Add(time.Duration(i) * time.Hour)
 			if hr >= Nhours {
 				return nil, fmt.Errorf("attempting to extend hourly forecast beyond bounds. length=%d, tmin=%s, tNew=%s, tmax=%s", Nhours, tsMin, tNew, tsMax)
 			}
 			out[hr] = &ForecastTimeseriesValue{
 				Time: ForecastTime{
 					Time:     tNew,
-					Duration: durationHour,
+					Duration: time.Hour,
 				},
 				Value: t.Value,
 			}
@@ -194,17 +214,28 @@ func (ts *ForecastTimeseries) hourly(tsMin time.Time, tsMax time.Time) (*Forecas
 	}
 	// fill values at end of timeseries
 	lastValue := out[hr-1]
-	for i := hr; i < Nhours; i++ {
+	padHoursEnd := Nhours - hr
+	for i := 1; i <= padHoursEnd; i++ {
 		out[hr] = &ForecastTimeseriesValue{
 			Time: ForecastTime{
-				Time:     lastValue.Time.Time.Add(time.Duration(int64(1 * 3600 * 1e9))),
-				Duration: durationHour,
+				Time:     lastValue.Time.Time.Add(time.Duration(i) * time.Hour),
+				Duration: time.Hour,
 			},
 			Value: lastValue.Value,
 		}
 		hr++
 	}
+	firstValue = out[0]
+	lastValue = out[len(out)-1]
+	if firstValue.Time.Time != tsMin {
+		return nil, fmt.Errorf("start times do not match for %s at %s.\nexpected=%s\nfound=   %s", ts.Name, ts.ID, tsMin, firstValue.Time.Time)
+	}
+	if lastValue.Time.Time != tsMax {
+		return nil, fmt.Errorf("end times do not match for %s at %s.\nexpected=%s\nfound=   %s", ts.Name, ts.ID, tsMax, lastValue.Time.Time)
+	}
 	return &ForecastTimeseries{
+		Name:   ts.Name,
+		ID:     ts.ID,
 		Values: out,
 		Units:  ts.Units,
 	}, nil
@@ -232,17 +263,27 @@ func averageForecastTimeseries(key string, forecasts []*ForecastTimeseries, tsMi
 		}
 		if len(fcstHourly.Values) != len(avgValues) {
 			return nil, fmt.Errorf(
-				"timeseries length must match for %s. lenght[i=%d] of %d != %d. Forecast endpoints:\n%s\n%s",
+				"timeseries length must match for %s. lenght[i=%d] of %d != %d. Forecast endpoints for %s:\n%s\n%s",
 				key,
 				i,
 				len(fcstHourly.Values), len(avgValues),
-				rootForecasts[0].id,
-				rootForecasts[i].id,
+				key,
+				rootForecasts[0].ID,
+				rootForecasts[i].ID,
 			)
 		}
 		for e, elem := range fcstHourly.Values {
 			if elem.Time != avgValues[e].Time {
-				return nil, fmt.Errorf("times must match. time[i%d] of %s != %s", e, elem.Time, avgValues[e].Time)
+				return nil, fmt.Errorf(
+					"times must match. time[i%d] of %s != %s. tsMin=%s. Forecast endpoints for %s:\n%s\n%s",
+					e,
+					elem.Time,
+					avgValues[e].Time,
+					tsMin,
+					key,
+					rootForecasts[0].ID,
+					rootForecasts[i].ID,
+				)
 			}
 			avgValues[e].Value += elem.Value / N
 		}
@@ -403,7 +444,11 @@ func ForecastDetailed(lat string, lon string) (*ForecastGridResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	res, err := apiCall(point.EndpointForecasGrid)
+	return getEndpointGridForecast(point.EndpointForecasGrid)
+}
+
+func getEndpointGridForecast(endpoint string) (*ForecastGridResponse, error) {
+	res, err := apiCall(endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -412,9 +457,10 @@ func ForecastDetailed(lat string, lon string) (*ForecastGridResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	var forecast *ForecastGridResponse
-	if err = json.Unmarshal(body, forecast); err != nil {
+	var forecast ForecastGridResponse
+	if err = json.Unmarshal(body, &forecast); err != nil {
 		return nil, err
 	}
-	return forecast, nil
+	forecast.ID = endpoint
+	return &forecast, nil
 }

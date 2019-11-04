@@ -117,3 +117,19 @@ func TestAverage(t *testing.T) {
 	assert.NotNil(t, fcstAvg)
 	assert.Equal(t, fcstAvg.Temperature.Values[0].Value, (forecasts[0].Temperature.Values[0].Value+forecasts[1].Temperature.Values[0].Value)/2.0)
 }
+
+func TestAverageEnd2End(t *testing.T) {
+	var endpoints = [...]string{
+		"https://api.weather.gov/gridpoints/SEW/151,119",
+		"https://api.weather.gov/gridpoints/OTX/37,137",
+	}
+	forecasts := make([]*ForecastGridResponse, len(endpoints))
+	for i, endpoint := range endpoints {
+		fcst, err := getEndpointGridForecast(endpoint)
+		assert.NoError(t, err)
+		forecasts[i] = fcst
+	}
+	fcstAvg, err := AverageForecast(forecasts)
+	assert.NoError(t, err)
+	assert.NotNil(t, fcstAvg)
+}
