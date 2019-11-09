@@ -152,14 +152,12 @@ func AverageForecast(forecasts []*ForecastGridResponse) (*ForecastGridResponse, 
 		meanElevation += fcst.Elevation.Value / N
 		for k, ts := range fcst.timeseriesMap() {
 			timeseriesArrays[k] = append(timeseriesArrays[k], ts)
-			for _, elem := range ts.Values {
-				if elem.Time.Time.Before(tsMin) {
-					tsMin = elem.Time.Time
-				}
-				if elem.Time.Time.After(tsMax) {
-					tsMax = elem.Time.Time
-				}
-			}
+		}
+		if fcst.ValidTimes.Time.Before(tsMin) {
+			tsMin = fcst.ValidTimes.Time
+		}
+		if fcst.ValidTimes.endTime().After(tsMax) {
+			tsMax = fcst.ValidTimes.endTime()
 		}
 	}
 	for k, ts := range timeseriesArrays {
@@ -200,7 +198,7 @@ func (ts *ForecastTimeseries) hourly(tsMin time.Time, tsMax time.Time) (*Forecas
 		for i := 0; i < int(t.Time.Duration.Hours()); i++ {
 			tNew := t.Time.Time.Add(time.Duration(i) * time.Hour)
 			if hr >= Nhours {
-				return nil, fmt.Errorf("attempting to extend hourly forecast beyond bounds. length=%d, tmin=%s, tNew=%s, tmax=%s", Nhours, tsMin, tNew, tsMax)
+				return nil, fmt.Errorf("attempting to extend hourly forecast for %s beyond bounds. length=%d, tmin=%s, tNew=%s, tmax=%s", ts.Name, Nhours, tsMin, tNew, tsMax)
 			}
 			out[hr] = &ForecastTimeseriesValue{
 				Time: ForecastTime{
@@ -245,7 +243,7 @@ func averageForecastTimeseries(key string, forecasts []*ForecastTimeseries, tsMi
 	N := float64(len(forecasts))
 	fcstBase, err := forecasts[0].hourly(tsMin, tsMax)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to convert forecast[0]=%s to hourly. %s", rootForecasts[0].ID, err.Error())
 	}
 	baseUnits := fcstBase.Units
 	avgValues := make([]*ForecastTimeseriesValue, len(fcstBase.Values))
@@ -259,7 +257,7 @@ func averageForecastTimeseries(key string, forecasts []*ForecastTimeseries, tsMi
 		}
 		fcstHourly, err := fcst.hourly(tsMin, tsMax)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to convert forecast[%d]=%s to hourly. %s", i, rootForecasts[i].ID, err.Error())
 		}
 		if len(fcstHourly.Values) != len(avgValues) {
 			return nil, fmt.Errorf(
