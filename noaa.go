@@ -442,10 +442,11 @@ func ForecastDetailed(lat string, lon string) (*ForecastGridResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	return getEndpointGridForecast(point.EndpointForecasGrid)
+	return GetEndpointGridForecast(point.EndpointForecasGrid)
 }
 
-func getEndpointGridForecast(endpoint string) (*ForecastGridResponse, error) {
+// GetEndpointGridForecast gets the forceast for an endpoint
+func GetEndpointGridForecast(endpoint string) (*ForecastGridResponse, error) {
 	res, err := apiCall(endpoint)
 	if err != nil {
 		return nil, err

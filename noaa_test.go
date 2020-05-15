@@ -125,7 +125,7 @@ func TestAverageEnd2End(t *testing.T) {
 	}
 	forecasts := make([]*ForecastGridResponse, len(endpoints))
 	for i, endpoint := range endpoints {
-		fcst, err := getEndpointGridForecast(endpoint)
+		fcst, err := GetEndpointGridForecast(endpoint)
 		assert.NoError(t, err)
 		forecasts[i] = fcst
 	}
