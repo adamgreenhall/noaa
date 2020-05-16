@@ -9,17 +9,16 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 )
 
 // Constant values for the weather.gov REST API
 const (
-	API       = "https://api.weather.gov"
-	APIKey    = "github.com/icodealot/noaa" // See auth docs at weather.gov
-	APIAccept = "application/ld+json"       // Changes may affect struct mappings below
+	API        = "https://api.weather.gov"
+	APIKey     = "github.com/icodealot/noaa" // See auth docs at weather.gov
+	APIAccept  = "application/ld+json"       // Changes may affect struct mappings below
+	timeFormat = time.RFC3339
 )
 
 // PointsResponse holds the JSON values from /points/<lat,lon>
@@ -67,26 +66,6 @@ type ForecastResponse struct {
 	Point *PointsResponse
 }
 
-// ForecastTimeseriesValue is one timepoint of a forecast timeseries
-type ForecastTimeseriesValue struct {
-	Time  ForecastTime `json:"validTime,string"`
-	Value float64      `json:"value"`
-}
-
-// ForecastTimeseries holds the hourly forecasts values from within ForecastGridResponse
-type ForecastTimeseries struct {
-	Name   string
-	ID     string
-	Units  string                     `json:"uom"`
-	Values []*ForecastTimeseriesValue `json:"values"`
-}
-
-func (ts *ForecastTimeseries) fillInfo(name string, id string) *ForecastTimeseries {
-	ts.Name = name
-	ts.ID = id
-	return ts
-}
-
 type forecastElevation struct {
 	Value float64 `json:"value"`
 	Units string  `json:"unitCode"`
@@ -131,162 +110,6 @@ func newForecastGridResponse(updated string, elevation forecastElevation, timese
 		SnowFallAmount:           timeseriesMap["SnowFallAmount"],
 		SnowLevel:                timeseriesMap["SnowLevel"],
 	}, nil
-}
-
-// AverageForecast takes the mean between many ForecastGridResponse
-func AverageForecast(forecasts []*ForecastGridResponse) (*ForecastGridResponse, error) {
-	if len(forecasts) == 0 {
-		return nil, fmt.Errorf("no forecasts to average")
-	}
-	N := float64(len(forecasts))
-	tsMin := forecasts[0].Temperature.Values[0].Time.Time
-	tsMax := forecasts[0].Temperature.Values[0].Time.Time
-	baseElevationUnits := forecasts[0].Elevation.Units
-	meanElevation := 0.0
-	timeseriesArrays := make(map[string][]*ForecastTimeseries, 0)
-	meanTimeseries := make(map[string]*ForecastTimeseries, 0)
-	for i, fcst := range forecasts {
-		if fcst.Elevation.Units != baseElevationUnits {
-			return nil, fmt.Errorf("elevation units must match. units[i=%d] %s != %s", i, fcst.Elevation.Units, baseElevationUnits)
-		}
-		meanElevation += fcst.Elevation.Value / N
-		for k, ts := range fcst.timeseriesMap() {
-			timeseriesArrays[k] = append(timeseriesArrays[k], ts)
-		}
-		if fcst.ValidTimes.Time.Before(tsMin) {
-			tsMin = fcst.ValidTimes.Time
-		}
-		if fcst.ValidTimes.endTime().After(tsMax) {
-			tsMax = fcst.ValidTimes.endTime()
-		}
-	}
-	for k, ts := range timeseriesArrays {
-		tsMean, err := averageForecastTimeseries(k, ts, tsMin, tsMax, forecasts)
-		if err != nil {
-			return nil, err
-		}
-		meanTimeseries[k] = tsMean
-	}
-	return newForecastGridResponse(
-		forecasts[0].Updated,
-		forecastElevation{
-			Value: meanElevation,
-			Units: forecasts[0].Elevation.Units,
-		},
-		meanTimeseries,
-	)
-}
-
-func (ts *ForecastTimeseries) hourly(tsMin time.Time, tsMax time.Time) (*ForecastTimeseries, error) {
-	Nhours := int(tsMax.Sub(tsMin).Hours()) + 1
-	out := make([]*ForecastTimeseriesValue, Nhours)
-	hr := 0
-	firstValue := ts.Values[0]
-	padHoursStart := int(firstValue.Time.Time.Sub(tsMin).Hours())
-	for i := 0; i < padHoursStart; i++ {
-		tNew := tsMin.Add(time.Duration(i) * time.Hour)
-		out[hr] = &ForecastTimeseriesValue{
-			Time: ForecastTime{
-				Time:     tNew,
-				Duration: time.Hour,
-			},
-			Value: firstValue.Value,
-		}
-		hr++
-	}
-	for _, t := range ts.Values {
-		for i := 0; i < int(t.Time.Duration.Hours()); i++ {
-			tNew := t.Time.Time.Add(time.Duration(i) * time.Hour)
-			if hr >= Nhours {
-				return nil, fmt.Errorf("attempting to extend hourly forecast for %s beyond bounds. length=%d, tmin=%s, tNew=%s, tmax=%s", ts.Name, Nhours, tsMin, tNew, tsMax)
-			}
-			out[hr] = &ForecastTimeseriesValue{
-				Time: ForecastTime{
-					Time:     tNew,
-					Duration: time.Hour,
-				},
-				Value: t.Value,
-			}
-			hr++
-		}
-	}
-	// fill values at end of timeseries
-	lastValue := out[hr-1]
-	padHoursEnd := Nhours - hr
-	for i := 1; i <= padHoursEnd; i++ {
-		out[hr] = &ForecastTimeseriesValue{
-			Time: ForecastTime{
-				Time:     lastValue.Time.Time.Add(time.Duration(i) * time.Hour),
-				Duration: time.Hour,
-			},
-			Value: lastValue.Value,
-		}
-		hr++
-	}
-	firstValue = out[0]
-	lastValue = out[len(out)-1]
-	if firstValue.Time.Time != tsMin {
-		return nil, fmt.Errorf("start times do not match for %s at %s.\nexpected=%s\nfound=   %s", ts.Name, ts.ID, tsMin, firstValue.Time.Time)
-	}
-	if lastValue.Time.Time != tsMax {
-		return nil, fmt.Errorf("end times do not match for %s at %s.\nexpected=%s\nfound=   %s", ts.Name, ts.ID, tsMax, lastValue.Time.Time)
-	}
-	return &ForecastTimeseries{
-		Name:   ts.Name,
-		ID:     ts.ID,
-		Values: out,
-		Units:  ts.Units,
-	}, nil
-}
-
-func averageForecastTimeseries(key string, forecasts []*ForecastTimeseries, tsMin time.Time, tsMax time.Time, rootForecasts []*ForecastGridResponse) (*ForecastTimeseries, error) {
-	N := float64(len(forecasts))
-	fcstBase, err := forecasts[0].hourly(tsMin, tsMax)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert forecast[0]=%s to hourly. %s", rootForecasts[0].ID, err.Error())
-	}
-	baseUnits := fcstBase.Units
-	avgValues := make([]*ForecastTimeseriesValue, len(fcstBase.Values))
-	// convert each of these ts to hourly timeseries (currently irregular)
-	for i, elem := range fcstBase.Values {
-		avgValues[i] = &ForecastTimeseriesValue{Time: elem.Time, Value: 0.0}
-	}
-	for i, fcst := range forecasts {
-		if fcst.Units != baseUnits {
-			return nil, fmt.Errorf("units must match units[i=%d] %s != %s", i, fcst.Units, baseUnits)
-		}
-		fcstHourly, err := fcst.hourly(tsMin, tsMax)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert forecast[%d]=%s to hourly. %s", i, rootForecasts[i].ID, err.Error())
-		}
-		if len(fcstHourly.Values) != len(avgValues) {
-			return nil, fmt.Errorf(
-				"timeseries length must match for %s. lenght[i=%d] of %d != %d. Forecast endpoints for %s:\n%s\n%s",
-				key,
-				i,
-				len(fcstHourly.Values), len(avgValues),
-				key,
-				rootForecasts[0].ID,
-				rootForecasts[i].ID,
-			)
-		}
-		for e, elem := range fcstHourly.Values {
-			if elem.Time != avgValues[e].Time {
-				return nil, fmt.Errorf(
-					"times must match. time[i%d] of %s != %s. tsMin=%s. Forecast endpoints for %s:\n%s\n%s",
-					e,
-					elem.Time,
-					avgValues[e].Time,
-					tsMin,
-					key,
-					rootForecasts[0].ID,
-					rootForecasts[i].ID,
-				)
-			}
-			avgValues[e].Value += elem.Value / N
-		}
-	}
-	return &ForecastTimeseries{Units: baseUnits, Values: avgValues}, nil
 }
 
 // Cache used for point lookup to save some HTTP round trips
@@ -380,62 +203,6 @@ func Forecast(lat string, lon string) (forecast *ForecastResponse, err error) {
 	return forecast, nil
 }
 
-// ForecastTime parses the NWS time format
-type ForecastTime struct {
-	Time     time.Time
-	Duration time.Duration
-}
-
-func (t *ForecastTime) endTime() time.Time {
-	return t.Time.Add(t.Duration)
-}
-
-func parseDuration(t string) (*time.Duration, error) {
-	durationRegex := regexp.MustCompile(`([0-9]d)?(t[0-9]+h)?`)
-	if !strings.Contains(t, "P") {
-		return nil, fmt.Errorf("no duration suffix found for time %s", t)
-	}
-	durStr := strings.ToLower(strings.Split(t, "P")[1])
-	matches := durationRegex.FindStringSubmatch(durStr)
-	dur := time.Duration(0)
-	if len(matches[1]) > 0 {
-		durIntDays, err := strconv.Atoi(strings.ReplaceAll(matches[1], "d", ""))
-		if err != nil {
-			return nil, err
-		}
-		durDays, err := time.ParseDuration(fmt.Sprintf("%dh", durIntDays*24))
-		if err != nil {
-			return nil, err
-		}
-		dur += durDays
-	}
-	if len(matches[2]) > 0 {
-		durHours, err := time.ParseDuration(strings.ReplaceAll(matches[2], "t", ""))
-		if err != nil {
-			return nil, err
-		}
-		dur += durHours
-	}
-	return &dur, nil
-}
-
-// UnmarshalJSON parses the NWS time format
-func (t *ForecastTime) UnmarshalJSON(buf []byte) error {
-	ttStr := strings.ReplaceAll(string(buf), `"`, "")
-	tBase := strings.Split(ttStr, "+")[0]
-	tt, err := time.Parse(time.RFC3339, fmt.Sprintf("%sZ", tBase))
-	if err != nil {
-		return err
-	}
-	dur, err := parseDuration(ttStr)
-	if err != nil {
-		return err
-	}
-	t.Time = tt
-	t.Duration = *dur
-	return nil
-}
-
 // ForecastDetailed returns a set of timeseries in ForecastGridResponse
 func ForecastDetailed(lat string, lon string) (*ForecastGridResponse, error) {
 	point, err := Points(lat, lon)
@@ -445,7 +212,7 @@ func ForecastDetailed(lat string, lon string) (*ForecastGridResponse, error) {
 	return GetEndpointGridForecast(point.EndpointForecasGrid)
 }
 
-// GetEndpointGridForecast gets the forceast for an endpoint
+// GetEndpointGridForecast returns the forecast for an endpoint
 func GetEndpointGridForecast(endpoint string) (*ForecastGridResponse, error) {
 	res, err := apiCall(endpoint)
 	if err != nil {

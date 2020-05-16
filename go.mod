@@ -1,4 +1,4 @@
-module github.com/adamgreenhall/noaa
+module noaa
 
 go 1.14
 
