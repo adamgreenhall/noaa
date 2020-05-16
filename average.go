@@ -66,8 +66,7 @@ func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries,
 
 	out := make([]*ForecastTimeseriesValue, Nhours)
 	hr := 0
-	firstValue := ts.Values[0]
-	lastValue := ts.Values[len(ts.Values)-1]
+	firstValueSeries := ts.Values[0]
 	padHoursStart := int(tsTmin.Sub(tMin).Hours())
 	for i := 0; i < padHoursStart; i++ {
 		tNew := tMin.Add(time.Duration(i) * time.Hour)
@@ -76,7 +75,7 @@ func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries,
 				Time:     tNew,
 				Duration: time.Hour,
 			},
-			Value: firstValue.Value,
+			Value: firstValueSeries.Value,
 		}
 		hr++
 	}
@@ -84,7 +83,7 @@ func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries,
 		for i := 0; i < int(t.Time.Duration.Hours()); i++ {
 			tNew := t.Time.Time.Add(time.Duration(i) * time.Hour)
 			if hr >= Nhours {
-				continue
+				return nil, fmt.Errorf("attempting to extend hourly forecast for %s beyond bounds. length=%d, tmin=%s, tNew=%s, tmax=%s", ts.Name, Nhours, tMin, tNew, tMax)
 			}
 			out[hr] = &ForecastTimeseriesValue{
 				Time: ForecastTime{
@@ -97,6 +96,7 @@ func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries,
 		}
 	}
 	// fill values at end of timeseries
+	lastValue := out[hr-1]
 	padHoursEnd := Nhours - hr
 	for i := 1; i <= padHoursEnd; i++ {
 		out[hr] = &ForecastTimeseriesValue{
@@ -110,8 +110,8 @@ func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries,
 	}
 	firstHourlyValue := out[0]
 	lastHourlyValue := out[len(out)-1]
-	msgDebugging := (fmt.Sprintf("original: len=%03d, tmin=%s, tmax=%s\n", lenTs, tsTmin.Format(timeFormat), tsTmax.Format(timeFormat)) +
-		fmt.Sprintf("hourly  : len=%03d, tmin=%s, tmax=%s", Nhours, tMin.Format(timeFormat), tMax.Format(timeFormat)))
+	msgDebugging := (fmt.Sprintf("original series: len=%03d, tmin=%s, tmax=%s\n", lenTs, tsTmin.Format(timeFormat), tsTmax.Format(timeFormat)) +
+		fmt.Sprintf("hourly series  : len=%03d, tmin=%s, tmax=%s", Nhours, tMin.Format(timeFormat), tMax.Format(timeFormat)))
 	if firstHourlyValue.Time.Time != tMin {
 		return nil, fmt.Errorf(
 			"start times do not match for %s at %s.\nexpected=%s\nfound=   %s\n%s",
