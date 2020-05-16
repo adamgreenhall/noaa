@@ -63,6 +63,8 @@ func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries,
 	tsTmin := ts.Tmin()
 	tsTmax := ts.Tmax()
 	lenTs := len(ts.Values)
+	msgDebugging := (fmt.Sprintf("original series: len=%03d, tmin=%s, tmax=%s\n", lenTs, tsTmin.Format(timeFormat), tsTmax.Format(timeFormat)) +
+		fmt.Sprintf("hourly series  : len=%03d, tmin=%s, tmax=%s", Nhours, tMin.Format(timeFormat), tMax.Format(timeFormat)))
 
 	out := make([]*ForecastTimeseriesValue, Nhours)
 	hr := 0
@@ -83,7 +85,10 @@ func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries,
 		for i := 0; i < int(t.Time.Duration.Hours()); i++ {
 			tNew := t.Time.Time.Add(time.Duration(i) * time.Hour)
 			if hr >= Nhours {
-				return nil, fmt.Errorf("attempting to extend hourly forecast for %s beyond bounds. length=%d, tmin=%s, tNew=%s, tmax=%s", ts.Name, Nhours, tMin, tNew, tMax)
+				// reached the end of the hourly series
+				// the original series may have extra data (exists outside of the forecast's valid range),
+				// but we're cutting it off
+				break
 			}
 			out[hr] = &ForecastTimeseriesValue{
 				Time: ForecastTime{
@@ -110,8 +115,6 @@ func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries,
 	}
 	firstHourlyValue := out[0]
 	lastHourlyValue := out[len(out)-1]
-	msgDebugging := (fmt.Sprintf("original series: len=%03d, tmin=%s, tmax=%s\n", lenTs, tsTmin.Format(timeFormat), tsTmax.Format(timeFormat)) +
-		fmt.Sprintf("hourly series  : len=%03d, tmin=%s, tmax=%s", Nhours, tMin.Format(timeFormat), tMax.Format(timeFormat)))
 	if firstHourlyValue.Time.Time != tMin {
 		return nil, fmt.Errorf(
 			"start times do not match for %s at %s.\nexpected=%s\nfound=   %s\n%s",
