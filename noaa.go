@@ -109,6 +109,7 @@ func newForecastGridResponse(updated string, elevation forecastElevation, timese
 		PrecipitationQuantity:    timeseriesMap["PrecipitationQuantity"],
 		SnowFallAmount:           timeseriesMap["SnowFallAmount"],
 		SnowLevel:                timeseriesMap["SnowLevel"],
+		WindSpeed:                timeseriesMap["WindSpeed"],
 	}, nil
 }
 
