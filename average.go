@@ -50,93 +50,13 @@ func AverageForecast(forecasts []*ForecastGridResponse, debug bool) (*ForecastGr
 	}
 	return newForecastGridResponse(
 		forecasts[0].Updated,
+		&ForecastTime{tsMin, tsMax.Sub(tsMin)},
 		forecastElevation{
 			Value: meanElevation,
 			Units: forecasts[0].Elevation.Units,
 		},
 		meanTimeseries,
 	)
-}
-
-func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries, error) {
-	Nhours := int(tMax.Sub(tMin).Hours()) + 1
-	tsTmin := ts.Tmin()
-	tsTmax := ts.Tmax()
-	lenTs := len(ts.Values)
-	msgDebugging := (fmt.Sprintf("original series: len=%03d, tmin=%s, tmax=%s\n", lenTs, tsTmin.Format(timeFormat), tsTmax.Format(timeFormat)) +
-		fmt.Sprintf("hourly series  : len=%03d, tmin=%s, tmax=%s", Nhours, tMin.Format(timeFormat), tMax.Format(timeFormat)))
-
-	out := make([]*ForecastTimeseriesValue, Nhours)
-	hr := 0
-	firstValueSeries := ts.Values[0]
-	padHoursStart := int(tsTmin.Sub(tMin).Hours())
-	for i := 0; i < padHoursStart; i++ {
-		tNew := tMin.Add(time.Duration(i) * time.Hour)
-		out[hr] = &ForecastTimeseriesValue{
-			Time: ForecastTime{
-				Time:     tNew,
-				Duration: time.Hour,
-			},
-			Value: firstValueSeries.Value,
-		}
-		hr++
-	}
-	for _, t := range ts.Values {
-		for i := 0; i < int(t.Time.Duration.Hours()); i++ {
-			tNew := t.Time.Time.Add(time.Duration(i) * time.Hour)
-			if hr >= Nhours {
-				// reached the end of the hourly series
-				// the original series may have extra data (exists outside of the forecast's valid range),
-				// but we're cutting it off
-				break
-			}
-			out[hr] = &ForecastTimeseriesValue{
-				Time: ForecastTime{
-					Time:     tNew,
-					Duration: time.Hour,
-				},
-				Value: t.Value,
-			}
-			hr++
-		}
-	}
-	// fill values at end of timeseries
-	lastValue := out[hr-1]
-	padHoursEnd := Nhours - hr
-	for i := 1; i <= padHoursEnd; i++ {
-		out[hr] = &ForecastTimeseriesValue{
-			Time: ForecastTime{
-				Time:     lastValue.Time.Time.Add(time.Duration(i) * time.Hour),
-				Duration: time.Hour,
-			},
-			Value: lastValue.Value,
-		}
-		hr++
-	}
-	firstHourlyValue := out[0]
-	lastHourlyValue := out[len(out)-1]
-	if firstHourlyValue.Time.Time != tMin {
-		return nil, fmt.Errorf(
-			"start times do not match for %s at %s.\nexpected=%s\nfound=   %s\n%s",
-			ts.Name, ts.ID,
-			tMin.Format(timeFormat), firstHourlyValue.Time.Time.Format(timeFormat),
-			msgDebugging,
-		)
-	}
-	if lastHourlyValue.Time.Time != tMax {
-		return nil, fmt.Errorf(
-			"end times do not match for %s at %s.\nexpected=%s\nfound=   %s\n%s",
-			ts.Name, ts.ID,
-			tMax.Format(timeFormat), lastHourlyValue.Time.Time.Format(timeFormat),
-			msgDebugging,
-		)
-	}
-	return &ForecastTimeseries{
-		Name:   ts.Name,
-		ID:     ts.ID,
-		Values: out,
-		Units:  ts.Units,
-	}, nil
 }
 
 func averageForecastTimeseries(key string, forecasts []*ForecastTimeseries, tsMin time.Time, tsMax time.Time, rootForecasts []*ForecastGridResponse) (*ForecastTimeseries, error) {

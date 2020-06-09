@@ -74,7 +74,7 @@ type forecastElevation struct {
 // ForecastGridResponse holds the JSON values from /gridpoints/<cwa>/<x,y>
 type ForecastGridResponse struct {
 	ID                       string              `json:"@id"`
-	Updated                  string              `json:"updateTime"`
+	Updated                  time.Time           `json:"updateTime"`
 	ValidTimes               *ForecastTime       `json:"validTimes"`
 	Elevation                forecastElevation   `json:"elevation"`
 	Temperature              *ForecastTimeseries `json:"temperature"`
@@ -98,10 +98,11 @@ func (f *ForecastGridResponse) timeseriesMap() map[string]*ForecastTimeseries {
 	return timeseries
 }
 
-func newForecastGridResponse(updated string, elevation forecastElevation, timeseriesMap map[string]*ForecastTimeseries) (*ForecastGridResponse, error) {
+func newForecastGridResponse(updated time.Time, validTimes *ForecastTime, elevation forecastElevation, timeseriesMap map[string]*ForecastTimeseries) (*ForecastGridResponse, error) {
 	// TODO: check keys exist
 	return &ForecastGridResponse{
 		Updated:                  updated,
+		ValidTimes:               validTimes,
 		Elevation:                elevation,
 		Temperature:              timeseriesMap["Temperature"],
 		SkyCover:                 timeseriesMap["SkyCover"],
