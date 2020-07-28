@@ -142,7 +142,7 @@ func CreateForecastHourly(grid *ForecastGridResponse) (*ForecastHourly, error) {
 			values[i][j] = math.Round(val.Value*10) / 10
 		}
 	}
-	if grid.Elevation.Units != "unit:m" {
+	if !strings.HasSuffix(strings.ToLower(grid.Elevation.Units), "unit:m") {
 		return nil, fmt.Errorf("unknown elevation units: %s", grid.Elevation.Units)
 	}
 	return &ForecastHourly{
