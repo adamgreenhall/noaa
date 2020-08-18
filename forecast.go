@@ -49,7 +49,7 @@ func (t *ForecastTime) endTime() time.Time {
 }
 
 func parseDuration(t string) (*time.Duration, error) {
-	durationRegex := regexp.MustCompile(`([0-9]d)?(t[0-9]+h)?`)
+	durationRegex := regexp.MustCompile(`([0-9]d)?(t[0-9]+h)?([0-9]+m)?`)
 	if !strings.Contains(t, "P") {
 		return nil, fmt.Errorf("no duration suffix found for time %s", t)
 	}
@@ -74,6 +74,16 @@ func parseDuration(t string) (*time.Duration, error) {
 		}
 		dur += durHours
 	}
+	if len(matches[3]) > 0 {
+		durMinutes, err := time.ParseDuration(matches[3])
+		if err != nil {
+			return nil, err
+		}
+		// round up to the next hour
+		if durMinutes >= 1*time.Minute {
+			dur += time.Hour
+		}
+	}
 	return &dur, nil
 }
 
@@ -81,7 +91,9 @@ func parseDuration(t string) (*time.Duration, error) {
 func (t *ForecastTime) UnmarshalJSON(buf []byte) error {
 	ttStr := strings.ReplaceAll(string(buf), `"`, "")
 	tBase := strings.Split(ttStr, "+")[0]
-	tt, err := time.Parse(time.RFC3339, fmt.Sprintf("%sZ", tBase))
+	// truncate to hour
+	tBase = strings.Split(tBase, ":")[0] + ":00:00Z"
+	tt, err := time.Parse(time.RFC3339, tBase)
 	if err != nil {
 		return err
 	}

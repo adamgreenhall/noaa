@@ -74,14 +74,13 @@ func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries,
 	lastValue := out[hr-1]
 	padHoursEnd := Nhours - hr
 	for i := 1; i <= padHoursEnd; i++ {
-		out[hr] = &ForecastTimeseriesValue{
+		out[hr+i-1] = &ForecastTimeseriesValue{
 			Time: ForecastTime{
 				Time:     lastValue.Time.Time.Add(time.Duration(i) * time.Hour),
 				Duration: time.Hour,
 			},
 			Value: lastValue.Value,
 		}
-		hr++
 	}
 	firstHourlyValue := out[0]
 	lastHourlyValue := out[len(out)-1]
