@@ -49,12 +49,15 @@ func (t *ForecastTime) endTime() time.Time {
 }
 
 func parseDuration(t string) (*time.Duration, error) {
-	durationRegex := regexp.MustCompile(`([0-9]d)?(t[0-9]+h)?([0-9]+m)?`)
+	durationRegex := regexp.MustCompile(`([0-9]d)?t?([0-9]+h)?([0-9]+m)?`)
 	if !strings.Contains(t, "P") {
 		return nil, fmt.Errorf("no duration suffix found for time %s", t)
 	}
 	durStr := strings.ToLower(strings.Split(t, "P")[1])
 	matches := durationRegex.FindStringSubmatch(durStr)
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("duration pattern does not match expected: %s", t)
+	}
 	dur := time.Duration(0)
 	if len(matches[1]) > 0 {
 		durIntDays, err := strconv.Atoi(strings.ReplaceAll(matches[1], "d", ""))

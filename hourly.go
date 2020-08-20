@@ -1,6 +1,7 @@
 package noaa
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -93,11 +94,16 @@ func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries,
 		)
 	}
 	if lastHourlyValue.Time.Time != tMax {
+		tsJSON, err := json.Marshal(ts)
+		if err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf(
-			"end times do not match for %s at %s.\nexpected=%s\nfound=   %s\n%s",
+			"end times do not match for %s at %s.\nexpected=%s\nfound=   %s\n%s\n%s",
 			ts.Name, ts.ID,
 			tMax.Format(timeFormat), lastHourlyValue.Time.Time.Format(timeFormat),
 			msgDebugging,
+			string(tsJSON),
 		)
 	}
 	return &ForecastTimeseries{
