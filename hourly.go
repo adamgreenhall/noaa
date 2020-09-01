@@ -1,7 +1,6 @@
 package noaa
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -42,10 +41,9 @@ func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries,
 	firstValueSeries := ts.Values[0]
 	padHoursStart := int(tsTmin.Sub(tMin).Hours())
 	for i := 0; i < padHoursStart; i++ {
-		tNew := tMin.Add(time.Duration(i) * time.Hour)
 		out[hr] = &ForecastTimeseriesValue{
 			Time: ForecastTime{
-				Time:     tNew,
+				Time:     tMin.Add(time.Duration(i) * time.Hour),
 				Duration: time.Hour,
 			},
 			Value: firstValueSeries.Value,
@@ -53,8 +51,23 @@ func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries,
 		hr++
 	}
 	for _, t := range ts.Values {
-		for i := 0; i < int(t.Time.Duration.Hours()); i++ {
-			tNew := t.Time.Time.Add(time.Duration(i) * time.Hour)
+		if hr > 0 && hr < Nhours {
+			// subsequent values in the original time series sometimes have gaps - interpolate using last value
+			lastValue := out[hr-1]
+			hrsInterpolate := int(t.Time.Time.Sub(lastValue.Time.Time).Hours())
+			for j := 1; j < hrsInterpolate; j++ {
+				out[hr] = &ForecastTimeseriesValue{
+					Time: ForecastTime{
+						Time:     lastValue.Time.Time.Add(time.Duration(j) * time.Hour),
+						Duration: time.Hour,
+					},
+					Value: lastValue.Value,
+				}
+				hr++
+			}
+		}
+		hrsSpan := int(t.Time.Duration.Hours())
+		for i := 0; i < hrsSpan; i++ {
 			if hr >= Nhours {
 				// reached the end of the hourly series
 				// the original series may have extra data (exists outside of the forecast's valid range),
@@ -63,7 +76,7 @@ func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries,
 			}
 			out[hr] = &ForecastTimeseriesValue{
 				Time: ForecastTime{
-					Time:     tNew,
+					Time:     t.Time.Time.Add(time.Duration(i) * time.Hour),
 					Duration: time.Hour,
 				},
 				Value: t.Value,
@@ -84,7 +97,7 @@ func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries,
 		}
 	}
 	firstHourlyValue := out[0]
-	lastHourlyValue := out[len(out)-1]
+	lastHourlyValue := out[Nhours-1]
 	if firstHourlyValue.Time.Time != tMin {
 		return nil, fmt.Errorf(
 			"start times do not match for %s at %s.\nexpected=%s\nfound=   %s\n%s",
@@ -94,16 +107,11 @@ func (ts *ForecastTimeseries) hourly(tMin, tMax time.Time) (*ForecastTimeseries,
 		)
 	}
 	if lastHourlyValue.Time.Time != tMax {
-		tsJSON, err := json.Marshal(ts)
-		if err != nil {
-			return nil, err
-		}
 		return nil, fmt.Errorf(
-			"end times do not match for %s at %s.\nexpected=%s\nfound=   %s\n%s\n%s",
+			"end times do not match for %s at %s.\nexpected=%s\nfound=   %s\n%s",
 			ts.Name, ts.ID,
 			tMax.Format(timeFormat), lastHourlyValue.Time.Time.Format(timeFormat),
 			msgDebugging,
-			string(tsJSON),
 		)
 	}
 	return &ForecastTimeseries{
